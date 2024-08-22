@@ -268,14 +268,14 @@ EntityClass *Eclass_InitFromText( const char *text ){
 			if ( !p ) {
 				break;
 			}
-			strcpy( e->flagnames[i], Get_COM_Token() );
+			strncpy( e->flagnames[i], Get_COM_Token(), std::size( e->flagnames[i] ) - 1 );
 		}
 	}
 
 	e->m_comments = text;
 
 	setSpecialLoad( e, "model=", e->m_modelpath );
-	e->m_modelpath = StringOutputStream( 256 )( PathCleaned( e->m_modelpath.c_str() ) ).c_str();
+	e->m_modelpath = StringStream<64>( PathCleaned( e->m_modelpath.c_str() ) );
 
 	if ( !e->fixedsize ) {
 		EntityClass_insertAttribute( *e, "angle", EntityClassAttribute( "direction", "Direction" ) );
@@ -298,7 +298,7 @@ void Eclass_ScanFile( EntityClassCollector& collector, const char *filename ){
 		globalErrorStream() << "ScanFile: " << filename << " not found\n";
 		return;
 	}
-	globalOutputStream() << "ScanFile: " << filename << "\n";
+	globalOutputStream() << "ScanFile: " << filename << '\n';
 
 	enum EParserState
 	{
@@ -369,7 +369,7 @@ void Eclass_ScanFile( EntityClassCollector& collector, const char *filename ){
 					collector.insert( e );
 				}
 				else{
-					globalErrorStream() << "Error parsing: " << debugname << " in " << filename << "\n";
+					globalErrorStream() << "Error parsing: " << debugname << " in " << filename << '\n';
 				}
 
 				buffer.clear();

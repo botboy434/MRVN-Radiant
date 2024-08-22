@@ -52,18 +52,17 @@
 #include <QDialogButtonBox>
 #include <QPushButton>
 #include <QGroupBox>
+#include <QApplication>
 #include "gtkutil/spinbox.h"
 #include "gtkutil/guisettings.h"
 #include <QPlainTextEdit>
 #include <QComboBox>
-#include <QTextEdit>
 
 #include "os/path.h"
 #include "math/aabb.h"
 #include "container/array.h"
 #include "generic/static.h"
 #include "stream/stringstream.h"
-#include "convert.h"
 #include "gtkutil/messagebox.h"
 #include "gtkutil/image.h"
 
@@ -365,13 +364,17 @@ void DoAbout(){
 				hbox->addWidget( buttons );
 				{
 					auto button = buttons->addButton( "Credits", QDialogButtonBox::ButtonRole::NoRole );
-					QObject::connect( button, &QPushButton::clicked, [](){ OpenURL( StringOutputStream( 256 )( AppPath_get(), "credits.html" ) ); } );
+					QObject::connect( button, &QPushButton::clicked, [](){ OpenURL( StringStream( AppPath_get(), "credits.html" ) ); } );
 					button->setEnabled( false );
 				}
 				{
 					auto button = buttons->addButton( "Changelog", QDialogButtonBox::ButtonRole::NoRole );
-					QObject::connect( button, &QPushButton::clicked, [](){ OpenURL( StringOutputStream( 256 )( AppPath_get(), "changelog.txt" ) ); } );
+					QObject::connect( button, &QPushButton::clicked, [](){ OpenURL( StringStream( AppPath_get(), "changelog.txt" ) ); } );
 					button->setEnabled( false );
+				}
+				{
+					auto button = buttons->addButton( "About Qt", QDialogButtonBox::ButtonRole::NoRole );
+					QObject::connect( button, &QPushButton::clicked, &QApplication::aboutQt );
 				}
 			}
 		}
@@ -406,7 +409,7 @@ void DoAbout(){
 class TextEditor
 {
 	QWidget *m_window = 0;
-	QTextEdit *m_textView; // slave, text widget from the gtk editor
+	QPlainTextEdit *m_textView; // slave, text widget from the gtk editor
 	QPushButton *m_button; // save button
 	CopiedString m_filename;
 
@@ -415,11 +418,10 @@ class TextEditor
 		g_guiSettings.addWindow( m_window, "ShaderEditor/geometry" );
 
 		auto *vbox = new QVBoxLayout( m_window );
-		vbox->setContentsMargins( 0, 0, 0, 0 );
+		vbox->setContentsMargins( 4, 0, 4, 4 );
 
-		m_textView = new QTextEdit;
-		m_textView->setAcceptRichText( false );
-		m_textView->setLineWrapMode( QTextEdit::LineWrapMode::NoWrap );
+		m_textView = new QPlainTextEdit;
+		m_textView->setLineWrapMode( QPlainTextEdit::LineWrapMode::NoWrap );
 		vbox->addWidget( m_textView );
 
 		m_button = new QPushButton( "Save" );
@@ -526,16 +528,156 @@ bool DoLightIntensityDlg( int *intensity ){
 }
 
 void DoShaderInfoDlg( const char* name, const char* filename, const char* title ){
-	StringOutputStream text( 256 );
-	text << "&nbsp;&nbsp;The selected shader<br>";
-	text << "<b>" << name << "</b><br>";
-	text << "&nbsp;&nbsp;is located in file<br>";
-	text << "<b>" << filename << "</b>";
-
-	qt_MessageBox( MainFrame_getWindow(), text.c_str(), title );
+	const auto text = StringStream(
+		"&nbsp;&nbsp;The selected shader<br>"
+		"<b>", name, "</b><br>"
+		"&nbsp;&nbsp;is located in file<br>"
+		"<b>", filename, "</b>"
+	);
+	qt_MessageBox( MainFrame_getWindow(), text, title );
 }
 
+// =============================================================================
+// Install dev files dialog
+#include <QListWidget>
+#include <QMessageBox>
+#include <QScrollBar>
+#include <QTextStream>
 
+void DoInstallDevFilesDlg( const char *enginePath ){
+	std::vector<std::filesystem::path> files; // relative source files paths
+	const auto sourceBase = std::filesystem::path( g_pGameDescription->mGameToolsPath.c_str() ) / "install/";
+	const auto targetBase = std::filesystem::path( enginePath ) / basegame_get();
+	QString description;
+	{
+		std::error_code err;
+		std::filesystem::recursive_directory_iterator dirIter( sourceBase, err );
+		if( err ){
+			globalErrorStream() << err.message().c_str() << ' ' << sourceBase.string().c_str() << '\n';
+			return;
+		}
+		for( const auto& dirEntry : dirIter ) {
+			if( err ){
+				globalErrorStream() << err.message().c_str() << '\n';
+				break;
+			}
+			if( dirEntry.is_regular_file( err ) && !err ){
+				if( dirIter.depth() == 0 && dirEntry.path().filename() == ".description" ){
+					if( QFile f( QString::fromStdString( dirEntry.path().string() ) ); f.open( QIODevice::ReadOnly | QIODevice::Text ) )
+						description = QTextStream( &f ).readAll();
+				}
+				else{
+					files.push_back( std::filesystem::relative( dirEntry.path(), sourceBase, err ) );
+				}
+			}
+		}
+	}
+	if( !files.empty() ){
+		QDialog dialog( nullptr, Qt::Window );
+		dialog.setWindowTitle( "Install Map Developer's Files" );
+		{
+			auto *box = new QVBoxLayout( &dialog );
+			{
+				auto *label = new QLabel( "Would you like to install following files recommended for fluent map development\nto " + QString::fromStdString( targetBase.string() ) + "?" );
+				label->setAlignment( Qt::AlignmentFlag::AlignHCenter );
+				box->addWidget( label );
+			}
+			QListWidget *listWidget;
+			{
+				listWidget = new QListWidget;
+				listWidget->setSelectionMode( QAbstractItemView::SelectionMode::NoSelection );
+				box->addWidget( listWidget, 0 );
+				for( const auto& file : files ){
+					listWidget->addItem( QString::fromStdString( file.string() ) );
+				}
+			}
+			if( !description.isEmpty() ){
+				box->addWidget( new QLabel( ".description" ) );
+				auto *text = new QPlainTextEdit( description );
+				text->setSizePolicy( QSizePolicy::Policy::MinimumExpanding, QSizePolicy::Policy::MinimumExpanding );
+				text->setLineWrapMode( QPlainTextEdit::LineWrapMode::NoWrap );
+				text->setReadOnly( true );
+				// set minimal size to fit text to avoid the need to resize window/scroll
+				const auto rect = text->fontMetrics().boundingRect( QRect(), 0, description );
+				text->setMinimumSize( rect.width() + text->contentsMargins().left() + text->contentsMargins().right()
+				                      + text->document()->documentMargin() * 2 + text->verticalScrollBar()->sizeHint().width(),
+				                      rect.height() + text->contentsMargins().top() + text->contentsMargins().bottom()
+				                      + text->document()->documentMargin() * 2 + text->horizontalScrollBar()->sizeHint().height() );
+
+				box->addWidget( text, 0 );
+			}
+			const auto doCopy = [&](){
+				QMessageBox::StandardButton overwrite = QMessageBox::StandardButton::Yes;
+				size_t copiedN = 0;
+				for( size_t i = 0; i < files.size(); ++i ){
+					const auto source = sourceBase / files[i];
+					const auto target = targetBase / files[i];
+					std::error_code err;
+					if( ( std::filesystem::exists( target, err ) || err ) && overwrite != QMessageBox::StandardButton::YesToAll ){
+						if( overwrite == QMessageBox::StandardButton::NoToAll ) continue;
+						overwrite = (QMessageBox::StandardButton)QMessageBox( QMessageBox::Icon::Question, "File exists",
+							QString( "File \"" ) + QString::fromStdString( target.string() ) + "\" exists.\nOverwrite it?",
+							QMessageBox::StandardButton::Yes |
+							QMessageBox::StandardButton::YesToAll |
+							QMessageBox::StandardButton::No |
+							QMessageBox::StandardButton::NoToAll |
+							QMessageBox::StandardButton::Abort, &dialog ).exec();
+						if( overwrite == QMessageBox::StandardButton::Abort ) break;
+						if( overwrite == QMessageBox::StandardButton::NoToAll || overwrite == QMessageBox::StandardButton::No ) continue;
+					}
+
+					const auto copy_file = [&](){
+						if( std::filesystem::exists( target, err ) ){
+							if( !std::filesystem::remove( target, err ) ){
+								return false;
+							}
+						}
+						else if( err ){
+							return false;
+						}
+						std::filesystem::create_directories( target.parent_path(), err );
+						if( err )
+							return false;
+						// std::filesystem::copy_options::overwrite_existing is broken in libstdc++ on windows, thus using std::filesystem::remove
+						return std::filesystem::copy_file( source, target, std::filesystem::copy_options::none, err );
+					};
+retry:
+					if( !copy_file() ){
+						const auto ret = (QMessageBox::StandardButton)QMessageBox( QMessageBox::Icon::Question, "Fail",
+							"Failed to write \"" + QString::fromStdString( target.string() ) + "\"\n" + err.message().c_str(),
+							QMessageBox::StandardButton::Retry |
+							QMessageBox::StandardButton::Ignore |
+							QMessageBox::StandardButton::Abort, &dialog ).exec();
+						if( ret == QMessageBox::StandardButton::Retry ) goto retry;
+						if( ret == QMessageBox::StandardButton::Ignore ) continue;
+						if( ret == QMessageBox::StandardButton::Abort ) break;
+					}
+					auto *item = listWidget->item( i );
+					item->setCheckState( Qt::CheckState::Checked );
+					listWidget->scrollToItem( item );
+					QCoreApplication::processEvents( QEventLoop::ProcessEventsFlag::ExcludeUserInputEvents );
+					++copiedN;
+				}
+
+				if( copiedN == files.size() )
+					qt_MessageBox( &dialog, "All files have been copied.", "Great Success!" );
+				else if( copiedN != 0 )
+					qt_MessageBox( &dialog, StringStream<64>( copiedN, '/', files.size(), " files have been copied." ), "Moderate Success!" );
+				else
+					qt_MessageBox( &dialog, "No files have been copied.", "Boo!" );
+
+				dialog.accept();
+			};
+			{
+				auto *buttons = new QDialogButtonBox( QDialogButtonBox::StandardButton::Ok | QDialogButtonBox::StandardButton::Cancel );
+				box->addWidget( buttons );
+				QObject::connect( buttons, &QDialogButtonBox::accepted, doCopy );
+				QObject::connect( buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject );
+			}
+		}
+		dialog.exec();
+	}
+}
 
 CopiedString g_TextEditor_editorCommand;
 
@@ -548,27 +690,25 @@ void DoShaderView( const char *shaderFileName, const char *shaderName, bool exte
 	const bool pathEmpty = string_empty( pathRoot );
 	const bool pathIsDir = !pathEmpty && file_is_directory( pathRoot );
 
-	StringOutputStream pathFull( 256 );
-	pathFull << pathRoot << ( pathIsDir? "" : "::" ) << shaderFileName;
+	const auto pathFull = StringStream( pathRoot, ( pathIsDir? "" : "::" ), shaderFileName );
 
 	if( pathEmpty ){
-		globalErrorStream() << "Failed to load shader file " << shaderFileName << "\n";
+		globalErrorStream() << "Failed to load shader file " << shaderFileName << '\n';
 	}
 	else if( external_editor && pathIsDir ){
 		if( g_TextEditor_editorCommand.empty() ){
 #ifdef WIN32
 			ShellExecute( (HWND)MainFrame_getWindow()->effectiveWinId(), 0, pathFull.c_str(), 0, 0, SW_SHOWNORMAL );
 #else
-			globalWarningStream() << "Failed to open '" << pathFull.c_str() << "'\nSet Shader Editor Command in preferences\n";
+			globalWarningStream() << "Failed to open '" << pathFull << "'\nSet Shader Editor Command in preferences\n";
 #endif
 		}
 		else{
-			StringOutputStream command( 256 );
-			command << g_TextEditor_editorCommand << " \"" << pathFull.c_str() << "\"";
-			globalOutputStream() << "Launching: " << command.c_str() << "\n";
+			auto command = StringStream( g_TextEditor_editorCommand, ' ', makeQuoted( pathFull ) );
+			globalOutputStream() << "Launching: " << command << '\n';
 			// note: linux does not return false if the command failed so it will assume success
-			if ( !Q_Exec( 0, const_cast<char*>( command.c_str() ), 0, true, false ) )
-				globalErrorStream() << "Failed to execute " << command.c_str() << "\n";
+			if ( !Q_Exec( 0, command.c_str(), 0, true, false ) )
+				globalErrorStream() << "Failed to execute " << command << '\n';
 		}
 	}
 	else if( ArchiveFile* file = GlobalFileSystem().openFile( shaderFileName ) ){
@@ -578,7 +718,7 @@ void DoShaderView( const char *shaderFileName, const char *shaderName, bool exte
 		text[size] = 0;
 		file->release();
 
-		g_textEditor.DoGtkTextEditor( text, shaderName, pathFull.c_str(), pathIsDir );
+		g_textEditor.DoGtkTextEditor( text, shaderName, pathFull, pathIsDir );
 		free( text );
 	}
 }
