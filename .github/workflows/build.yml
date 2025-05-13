@@ -68,7 +68,7 @@ jobs:
     - name: Install tools
       run: |
           sudo apt-get -qq update
-          sudo apt-get -y install mesa-common-dev qtbase5-dev glib
+          sudo apt-get -y install mesa-common-dev qtbase5-dev glib-2.0
     - uses: actions/checkout@v3
       with:
         submodules: recursive
